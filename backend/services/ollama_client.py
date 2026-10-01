@@ -1,0 +1,48 @@
+import json
+import httpx
+
+
+class OllamaClient:
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:11434",
+        model: str = "qwen3:4b",
+    ):
+        self.base_url = base_url
+        self.model = model
+
+    async def generate(self, system_prompt: str, user_prompt: str) -> dict:
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt,
+                },
+            ],
+            "stream": False,
+            "format": "json",
+            "options": {
+                "temperature": 0.1,
+                "num_ctx": 4096,
+            },
+            "keep_alive": 0,
+        }
+
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            response = await client.post(
+                f"{self.base_url}/api/chat",
+                json=payload,
+            )
+
+        response.raise_for_status()
+
+        result = response.json()
+
+        content = result["message"]["content"]
+
+        return json.loads(content)
