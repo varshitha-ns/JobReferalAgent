@@ -15,8 +15,17 @@ analyzer = LLMJobAnalyzer()
 @router.post("/analyze")
 async def analyze_job(job: JobData):
 
+    print("========================================")
+    print("FASTAPI JOB ANALYSIS STARTED")
+    print("Title:", job.title)
+    print("========================================")
+
     try:
+        print("Calling LLMJobAnalyzer...")
+
         profile = await analyzer.analyze(job)
+
+        print("LLMJobAnalyzer completed successfully.")
 
         return {
             "success": True,
@@ -25,7 +34,17 @@ async def analyze_job(job: JobData):
         }
 
     except Exception as error:
+
+        print("========================================")
+        print("FASTAPI JOB ANALYSIS ERROR")
+        print("Exception type:", type(error).__name__)
+        print("Exception:", repr(error))
+        print("========================================")
+
         raise HTTPException(
             status_code=500,
-            detail=f"Job analysis failed: {str(error)}",
+            detail={
+                "error_type": type(error).__name__,
+                "error": repr(error),
+            },
         )

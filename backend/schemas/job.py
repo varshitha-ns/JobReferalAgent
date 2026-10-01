@@ -11,6 +11,10 @@ class JobData(BaseModel):
 
 
 class JobProfile(BaseModel):
+    model_config = {
+        "extra": "forbid"
+    }
+
     company: Optional[str] = None
     title: str
     location: Optional[str] = None

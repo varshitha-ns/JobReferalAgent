@@ -3,67 +3,59 @@ from services.ollama_client import OllamaClient
 
 
 class LLMJobAnalyzer:
+
     def __init__(self):
         self.ollama = OllamaClient()
 
     async def analyze(self, job: JobData) -> JobProfile:
 
         system_prompt = """
-You are a job analysis AI agent.
+You are a job posting information extraction system.
 
-Your task is to analyze a software engineering job description
-and convert it into structured information.
+Return ONLY one valid JSON object.
 
-You must return ONLY valid JSON.
+The JSON MUST contain ONLY these keys:
 
-Do not add markdown.
-Do not add explanations.
-Do not add ```json.
-Do not invent information that is not present in the job description.
-
-Use this exact JSON structure:
-
-{
-  "company": string or null,
-  "title": string,
-  "location": string or null,
-  "experience": string or null,
-  "required_skills": [],
-  "preferred_skills": [],
-  "responsibilities": [],
-  "qualifications": [],
-  "source_url": string,
-  "source_domain": string,
-  "raw_text_length": integer
-}
+company
+title
+location
+experience
+required_skills
+preferred_skills
+responsibilities
+qualifications
 
 Rules:
 
-1. Extract the company only when it can reasonably be identified.
-2. Preserve the job title accurately.
-3. Extract required technical and professional skills.
-4. Separate required skills from preferred/nice-to-have skills.
-5. Extract the major responsibilities.
-6. Extract education, experience and qualification requirements.
-7. Do not confuse responsibilities with skills.
-8. Do not invent salary, location, experience or qualifications.
-9. If information is unavailable, use null or an empty list.
-10. Keep the output concise and structured.
+- Do not create any other keys.
+- Do not add explanations.
+- Do not use markdown.
+- Do not use code fences.
+- Do not invent information.
+- Use null when a single-value field is unavailable.
+- Use [] when a list field has no information.
+
+Required JSON structure:
+
+{
+  "company": null,
+  "title": "",
+  "location": null,
+  "experience": null,
+  "required_skills": [],
+  "preferred_skills": [],
+  "responsibilities": [],
+  "qualifications": []
+}
 """
 
         user_prompt = f"""
-Analyze the following job posting.
+Analyze this job posting.
 
-URL:
-{job.url}
-
-Title:
+JOB TITLE:
 {job.title}
 
-Hostname:
-{job.hostname}
-
-Job Description:
+JOB DESCRIPTION:
 {job.description}
 """
 
@@ -71,5 +63,10 @@ Job Description:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
+
+        # Add deterministic information ourselves.
+        result["source_url"] = job.url
+        result["source_domain"] = job.hostname
+        result["raw_text_length"] = len(job.description)
 
         return JobProfile.model_validate(result)
