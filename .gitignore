@@ -73,3 +73,6 @@ data/cache/
 *.tmp
 *.temp
 *.log
+
+# Personal candidate data
+backend/candidate/candidate_data.py
