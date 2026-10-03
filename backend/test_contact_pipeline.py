@@ -18,11 +18,11 @@ async def main():
 
     print()
     print("=" * 70)
-    print("VERIFIED REFERRAL CONTACTS")
+    print("REFERRAL CONTACTS WITH PUBLIC EMAIL EVIDENCE")
     print("=" * 70)
 
     print(
-        f"\nVerified contacts: "
+        f"\nContacts found: "
         f"{len(contacts)} / 5"
     )
 

@@ -1,4 +1,5 @@
 from typing import List
+import logging
 from urllib.parse import urlparse
 
 from people.schemas import (
@@ -6,6 +7,9 @@ from people.schemas import (
     ContactEvidence,
 )
 from people.sources.search_engine import SearchEngine
+
+
+logger = logging.getLogger(__name__)
 
 
 class PeopleDiscoveryAgent:
@@ -34,16 +38,17 @@ class PeopleDiscoveryAgent:
 
             print(f"\nSearching: {query}")
 
-            results = await self.search_engine.search(
-                query=query,
-                limit=10,
-            )
+            try:
+                results = await self.search_engine.search(query=query, limit=10)
+            except Exception as error:
+                # A failed query/source must not stop discovery from trying
+                # the remaining role queries.
+                logger.warning("People search failed for %r: %s", query, error)
+                continue
 
             for result in results:
 
-                linkedin_url = self._get_linkedin_profile(
-                    result["url"]
-                )
+                linkedin_url = self._get_linkedin_profile(result.get("url", ""))
 
                 if not linkedin_url:
                     continue
@@ -74,25 +79,27 @@ class PeopleDiscoveryAgent:
         location: str | None,
     ) -> List[str]:
 
-        location_part = (
-            f' "{location}"'
-            if location
-            else ""
-        )
-
-        return [
-            f'site:linkedin.com/in/ "{company}" "{job_title}"{location_part}',
-
-            f'site:linkedin.com/in/ "{company}" "Software Engineer"{location_part}',
-
-            f'site:linkedin.com/in/ "{company}" "Senior Software Engineer"{location_part}',
-
-            f'site:linkedin.com/in/ "{company}" "Engineering Manager"{location_part}',
-
-            f'site:linkedin.com/in/ "{company}" "Technical Recruiter"{location_part}',
-
-            f'site:linkedin.com/in/ "{company}" "Talent Acquisition"{location_part}',
+        # Use a location-qualified query first, then broaden so a location
+        # mismatch in a search snippet does not hide otherwise relevant staff.
+        queries = []
+        if location:
+            queries.append(
+                f'site:linkedin.com/in/ "{company}" "{job_title}" "{location}"'
+            )
+        role_queries = [
+            job_title,
+            "Software Engineer",
+            "Senior Software Engineer",
+            "Staff Software Engineer",
+            "Engineering Manager",
+            "Technical Recruiter",
+            "Talent Acquisition",
         ]
+        for role in role_queries:
+            query = f'site:linkedin.com/in/ "{company}" "{role}"'
+            if query not in queries:
+                queries.append(query)
+        return queries
 
     @staticmethod
     def _get_linkedin_profile(
@@ -141,17 +148,29 @@ class PeopleDiscoveryAgent:
         company: str,
     ) -> PersonProfile | None:
 
-        title = result.get("title", "").strip()
-        snippet = result.get("snippet", "").strip()
+        title = (result.get("title", "") or "").strip()
+        snippet = (result.get("snippet", "") or "").strip()
+        evidence_text = f"{title} {snippet}"
+
+        # Search terms are discovery signals only. The returned LinkedIn
+        # result itself must mention the company and an in-scope role.
+        company_terms = [
+            token.lower()
+            for token in company.replace("&", "and").split()
+            if len(token) >= 3
+        ]
+        evidence_lower = evidence_text.lower()
+        if not company_terms or not any(term in evidence_lower for term in company_terms):
+            return None
 
         name = self._extract_name(title)
 
         if not name:
             return None
 
-        role = self._extract_role(
-            f"{title} {snippet}"
-        )
+        role = self._extract_role(evidence_text)
+        if not role:
+            return None
 
         evidence = ContactEvidence(
             source_url=result["url"],

@@ -120,17 +120,15 @@ class ContactPipeline:
             if not person.public_email:
                 continue
 
-            # Email must have passed identity matching.
+            # Public evidence means the address and person were associated
+            # by a public source. It does not verify mailbox ownership.
             if person.email_verification_method != (
-                "public_source_identity_match"
+                "PUBLIC_EVIDENCE"
             ):
                 continue
 
-            person.email_verified = True
-
-            person.verification_status = (
-                VerificationStatus.EMAIL_VERIFIED
-            )
+            person.email_verified = False
+            person.verification_status = VerificationStatus.EMAIL_FOUND
 
             valid_contacts.append(
                 person
