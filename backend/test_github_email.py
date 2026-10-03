@@ -1,11 +1,11 @@
 import asyncio
 
-from people.public_finder import PublicEmailFinder
+from people.github import GitHubSource
 
 
 async def main():
 
-    finder = PublicEmailFinder()
+    source = GitHubSource()
 
     person = {
         "name": "Sumit Kumar Prasad",
@@ -15,18 +15,19 @@ async def main():
         ),
     }
 
-    results = await finder.find_public_emails(
+    results = await source.find_public_emails(
         person
     )
 
-    print()
+    print("\n")
     print("========================================")
-    print("FINAL PUBLIC EMAIL RESULTS")
+    print("FINAL RESULTS")
     print("========================================")
 
     if not results:
+
         print(
-            "No public email candidates found."
+            "No verified/public GitHub email evidence found."
         )
 
     for result in results:
@@ -41,6 +42,11 @@ async def main():
 
         print(
             f"URL: {result['source_url']}"
+        )
+
+        print(
+            f"Identity score: "
+            f"{result['identity_score']:.2f}"
         )
 
 
