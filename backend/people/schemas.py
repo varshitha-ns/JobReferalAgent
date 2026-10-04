@@ -40,6 +40,7 @@ class PersonProfile(BaseModel):
     github_url: Optional[str] = None
 
     public_email: Optional[str] = None
+    email_type: Optional[str] = None
 
     contact_type: ContactType = ContactType.OTHER
 
@@ -56,5 +57,8 @@ class PersonProfile(BaseModel):
     )
 
     email_verified: bool = False
+
+    # MX confirms mail routing for the company domain, never mailbox ownership.
+    email_domain_has_mx: Optional[bool] = None
 
     email_verification_method: Optional[str] = None

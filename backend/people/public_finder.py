@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
+from urllib.robotparser import RobotFileParser
 
 import httpx
 from bs4 import BeautifulSoup
 
 from people.identity_verification import IdentityVerifier
+from people.sources.search_engine import SearchEngine
 
 
 EMAIL_REGEX = re.compile(
@@ -19,8 +22,11 @@ class PublicEmailFinder:
     def __init__(
         self,
         search_url: str = "http://localhost:8080",
+        search_engine: Optional[SearchEngine] = None,
     ):
         self.search_url = search_url.rstrip("/")
+        self.search_engine = search_engine or SearchEngine(self.search_url)
+        self._robots_cache: Dict[str, Any] = {}
 
     # =========================================================
     # SEARCH
@@ -32,77 +38,38 @@ class PublicEmailFinder:
         limit: int = 10,
     ) -> List[Dict[str, str]]:
 
-        print(
-            f'\nSearXNG search: "{query}"'
-        )
+        return await self.search_engine.search(query=query, limit=limit)
 
-        try:
+    async def resolve_company_domain(self, company: str) -> Optional[str]:
+        known = IdentityVerifier.primary_domain(company)
+        if known:
+            return known
 
-            timeout = httpx.Timeout(
-                connect=15,
-                read=30,
-                write=15,
-                pool=15,
-            )
-
-            async with httpx.AsyncClient(
-                timeout=timeout,
-                follow_redirects=True,
-            ) as client:
-
-                response = await client.get(
-                    f"{self.search_url}/search",
-                    params={
-                        "q": query,
-                        "format": "json",
-                    },
-                )
-
-                response.raise_for_status()
-
-                data = response.json()
-
-        except Exception as error:
-
-            print(
-                "SearXNG search failed:",
-                type(error).__name__,
-                str(error),
-            )
-
-            return []
-
-        results = []
-
-        for item in data.get(
-            "results",
-            [],
-        )[:limit]:
-
-            url = item.get("url")
-
-            if not url:
+        results = await self.search(f'"{company}" official website', limit=10)
+        company_terms = [
+            token.lower()
+            for token in re.findall(r"[A-Za-z0-9]+", company)
+            if len(token) >= 3
+        ]
+        blocked = {
+            "linkedin.com", "facebook.com", "instagram.com", "x.com",
+            "twitter.com", "youtube.com", "wikipedia.org", "glassdoor.com",
+            "indeed.com", "naukri.com", "crunchbase.com",
+        }
+        for result in results:
+            url = result.get("url", "")
+            parsed = urlparse(url)
+            host = (parsed.hostname or "").lower().removeprefix("www.")
+            if parsed.scheme != "https" or not host or host in blocked:
                 continue
-
-            results.append(
-                {
-                    "title": item.get(
-                        "title",
-                        "",
-                    ),
-                    "url": url,
-                    "snippet": item.get(
-                        "content",
-                        "",
-                    ),
-                }
-            )
-
-        print(
-            f"SearXNG returned {len(results)} results."
-        )
-
-        return results
+            host_labels = set(host.split("."))
+            if any(
+                term in host_labels
+                or any(label.startswith(term + "-") for label in host_labels)
+                for term in company_terms
+            ):
+                return host
+        return None
 
     # =========================================================
     # QUERY GENERATION
@@ -120,44 +87,20 @@ class PublicEmailFinder:
             "linkedin_url",
             "",
         )
+        company_domain = person.get("company_domain")
 
         queries = [
-            f'"{name}" "{company}"',
             f'"{name}" "{company}" email',
-            f'"{name}" "{company}" contact',
-            f'"{name}" "{company}" developer',
-            f'"{name}" "{company}" engineer',
-            f'"{name}" "{company}" GitHub',
-            f'site:github.com "{name}"',
-            f'site:github.com "{name}" "{company}"',
         ]
 
+        if company_domain:
+            queries.append(f'"{name}" "@{company_domain}"')
+
         if title:
-            queries.extend(
-                [
-                    f'"{name}" "{title}" "{company}"',
-                    f'"{name}" "{title}" email',
-                ]
-            )
+            queries.append(f'"{name}" "{title}" "{company}" email')
 
-        # Extract LinkedIn slug.
-        if "/in/" in linkedin_url:
-
-            slug = (
-                linkedin_url
-                .split("/in/", 1)[1]
-                .strip("/")
-                .split("?", 1)[0]
-            )
-
-            if slug:
-                queries.extend(
-                    [
-                        f'"{slug}" github',
-                        f'"{slug}" email',
-                        f'site:github.com "{slug}"',
-                    ]
-                )
+        # LinkedIn is a discovery signal only. GitHub account discovery is
+        # handled by GitHubSource; we don't search or fetch private LinkedIn.
 
         # Deduplicate.
         unique = []
@@ -178,6 +121,18 @@ class PublicEmailFinder:
         url: str,
     ) -> Optional[str]:
 
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            return None
+        host = parsed.hostname.lower().removeprefix("www.")
+        if host in {
+            "linkedin.com", "facebook.com", "instagram.com", "x.com",
+            "twitter.com", "youtube.com",
+        }:
+            return None
+        if not await self._robots_allow(url):
+            return None
+
         headers = {
             "User-Agent": (
                 "Mozilla/5.0 "
@@ -190,7 +145,7 @@ class PublicEmailFinder:
         try:
 
             async with httpx.AsyncClient(
-                timeout=20,
+                timeout=httpx.Timeout(connect=5, read=12, write=5, pool=5),
                 follow_redirects=True,
                 headers=headers,
             ) as client:
@@ -200,11 +155,45 @@ class PublicEmailFinder:
                 if response.status_code != 200:
                     return None
 
+                if len(response.content) > 2_000_000:
+                    return response.content[:2_000_000].decode(
+                        response.encoding or "utf-8", errors="replace"
+                    )
                 return response.text
 
         except Exception:
 
             return None
+
+    async def _robots_allow(self, url: str) -> bool:
+        parsed = urlparse(url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        if origin not in self._robots_cache:
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(connect=4, read=5, write=4, pool=4),
+                    follow_redirects=True,
+                    headers={"User-Agent": "JobReferralAgent/1.0"},
+                ) as client:
+                    response = await client.get(f"{origin}/robots.txt")
+                if response.status_code == 404:
+                    self._robots_cache[origin] = None
+                elif response.status_code == 200:
+                    parser = RobotFileParser()
+                    parser.set_url(f"{origin}/robots.txt")
+                    parser.parse(response.text.splitlines())
+                    self._robots_cache[origin] = parser
+                else:
+                    # Fail closed for 403, 429, and server errors.
+                    self._robots_cache[origin] = False  # type: ignore[assignment]
+            except Exception:
+                self._robots_cache[origin] = False  # type: ignore[assignment]
+        policy = self._robots_cache[origin]
+        if policy is False:
+            return False
+        if policy is None:
+            return True
+        return policy.can_fetch("JobReferralAgent/1.0", url)
 
     # =========================================================
     # EMAIL EXTRACTION
@@ -228,11 +217,23 @@ class PublicEmailFinder:
 
             email = email.lower().strip()
 
+            local, _, domain = email.partition("@")
+
             if (
                 "noreply" in email
                 or "example.com" in email
                 or "example.org" in email
                 or "example.net" in email
+                or domain in {
+                    "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.in",
+                    "hotmail.com", "outlook.com", "live.com", "icloud.com",
+                    "protonmail.com", "proton.me", "rediffmail.com",
+                }
+                or local in {
+                    "info", "hello", "contact", "support", "sales", "admin",
+                    "help", "hr", "jobs", "careers", "recruiting", "noreply",
+                    "no-reply", "webmaster",
+                }
             ):
                 continue
 
@@ -321,11 +322,8 @@ class PublicEmailFinder:
         if not name_parts:
             return False
 
-        matched_name_parts = sum(
-            1
-            for part in name_parts
-            if part in text
-        )
+        text_tokens = set(re.findall(r"[a-z0-9]+", text))
+        matched_name_parts = sum(part in text_tokens for part in name_parts)
 
         name_ratio = (
             matched_name_parts
@@ -373,9 +371,19 @@ class PublicEmailFinder:
         print("PUBLIC EMAIL DISCOVERY")
         print("=" * 60)
 
-        queries = self.build_queries(
-            person
-        )
+        company = person.get("company", "")
+        if not company or not person.get("name"):
+            return []
+
+        company_domain = person.get("company_domain")
+        if not company_domain:
+            company_domain = await self.resolve_company_domain(company)
+        if not company_domain:
+            print("No company domain evidence; declining to associate a work email.")
+            return []
+
+        lookup_person = {**person, "company_domain": company_domain}
+        queries = self.build_queries(lookup_person)
 
         candidates = []
 
@@ -390,7 +398,9 @@ class PublicEmailFinder:
 
             for result in results:
 
-                url = result["url"]
+                url = result.get("url", "")
+                if not url:
+                    continue
 
                 if url in visited_urls:
                     continue
@@ -407,7 +417,7 @@ class PublicEmailFinder:
                 ):
                     print(
                         "Rejected unrelated result:",
-                        result["title"],
+                        result["title"].encode("ascii", errors="replace").decode("ascii"),
                     )
                     continue
 
@@ -420,11 +430,7 @@ class PublicEmailFinder:
                     "",
                 )
 
-                snippet_emails = (
-                    self.extract_emails(
-                        snippet
-                    )
-                )
+                snippet_emails = self.extract_emails(snippet)
 
                 for email in snippet_emails:
 
@@ -433,12 +439,7 @@ class PublicEmailFinder:
                             "email": email,
                             "source": "search_snippet",
                             "source_url": url,
-                            "person_name": person.get(
-                                "name"
-                            ),
-                            "company": person.get(
-                                "company"
-                            ),
+                            "company_domain": company_domain,
                             "evidence_text": (
                                 result.get(
                                     "title",
@@ -454,9 +455,7 @@ class PublicEmailFinder:
                 # Fetch public page
                 # -----------------------------------------
 
-                html = await self.fetch_page(
-                    url
-                )
+                html = await self.fetch_page(url)
 
                 if not html:
                     continue
@@ -465,11 +464,8 @@ class PublicEmailFinder:
                     html
                 )
 
-                page_emails = (
-                    self.extract_emails(
-                        text
-                    )
-                )
+                page_emails = self.extract_emails(text)
+                page_emails.extend(self._extract_mailto_emails(html))
 
                 for email in page_emails:
 
@@ -478,30 +474,21 @@ class PublicEmailFinder:
                             "email": email,
                             "source": "public_webpage",
                             "source_url": url,
-                            "person_name": person.get(
-                                "name"
-                            ),
-                            "company": person.get(
-                                "company"
-                            ),
+                            "company_domain": company_domain,
                             "evidence_text": text[
                                 :5000
                             ],
                         }
                     )
 
-        # =====================================================
-        # VERIFY IDENTITY
-        # =====================================================
+        # Verify only against text and profile fields originating from the
+        # source. Do not add the lookup target's name/company as evidence.
 
         verified = []
 
         for candidate in candidates:
 
-            result = IdentityVerifier.verify(
-                person,
-                candidate,
-            )
+            result = IdentityVerifier.verify(lookup_person, candidate)
 
             candidate[
                 "verification"
@@ -509,9 +496,7 @@ class PublicEmailFinder:
 
             if result["verified"]:
 
-                candidate[
-                    "status"
-                ] = "verified_public"
+                candidate["status"] = "PUBLIC_EVIDENCE"
 
                 verified.append(
                     candidate
@@ -544,13 +529,13 @@ class PublicEmailFinder:
 
         print()
         print("=" * 60)
-        print("VERIFIED PUBLIC EMAILS")
+        print("PUBLIC EMAIL EVIDENCE")
         print("=" * 60)
 
         if not final:
 
             print(
-                "No verified public email found."
+                "No person-linked public company email found."
             )
 
         for candidate in final:
@@ -588,3 +573,12 @@ class PublicEmailFinder:
             print("-" * 60)
 
         return final
+
+    @staticmethod
+    def _extract_mailto_emails(html: str) -> List[str]:
+        soup = BeautifulSoup(html, "html.parser")
+        found = []
+        for link in soup.select('a[href^="mailto:"]'):
+            value = link.get("href", "").split(":", 1)[-1].split("?", 1)[0]
+            found.extend(PublicEmailFinder.extract_emails(value))
+        return list(dict.fromkeys(found))

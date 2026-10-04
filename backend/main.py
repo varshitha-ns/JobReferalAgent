@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from routes.jobs import router as jobs_router
+from routes.contacts import router as contacts_router
 
 
 app = FastAPI(
@@ -22,6 +23,7 @@ app.add_middleware(
 
 # Routes
 app.include_router(jobs_router)
+app.include_router(contacts_router)
 
 
 @app.get("/")

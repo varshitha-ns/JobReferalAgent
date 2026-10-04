@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import httpx
+from people.identity_verification import IdentityVerifier
+from people.sources.search_engine import SearchEngine
 
 
 GITHUB_API = "https://api.github.com"
@@ -26,8 +28,10 @@ class GitHubSource:
     - Searches public commits for additional evidence.
     """
 
-    def __init__(self, timeout: float = 20.0):
+    def __init__(self, timeout: float = 20.0, search_engine=None):
         self.timeout = timeout
+        self.search_engine = search_engine or SearchEngine()
+        self._profile_cache: Dict[str, Optional[Dict[str, Any]]] = {}
 
     async def _get(
         self,
@@ -103,6 +107,8 @@ class GitHubSource:
     async def find_username_from_linkedin_slug(
         self,
         linkedin_url: Optional[str],
+        person_name: Optional[str] = None,
+        company: Optional[str] = None,
     ) -> Optional[str]:
 
         slug = self.extract_linkedin_slug(linkedin_url)
@@ -110,29 +116,54 @@ class GitHubSource:
         if not slug:
             return None
 
-        print(
-            f'GitHub direct lookup using LinkedIn slug: "{slug}"'
-        )
+        # A LinkedIn slug is only an index signal, never assumed to be a
+        # GitHub login. Resolve GitHub profile URLs from public search results.
+        query = f'"{slug}" GitHub'
+        if person_name:
+            query += f' "{person_name}"'
+        if company:
+            query += f' "{company}"'
+        try:
+            results = await self.search_engine.search(query, limit=10)
+        except Exception as error:
+            print("GitHub profile search failed:", error)
+            return None
 
-        profile = await self._get(
-            f"{GITHUB_API}/users/{slug}"
-        )
-
-        if profile:
-            login = profile.get("login")
-
-            if login:
-                print(
-                    f"GitHub profile found directly: {login}"
-                )
-
-                return login
-
-        print(
-            "LinkedIn slug is not a GitHub username."
-        )
+        for result in results:
+            username = self._github_username(result.get("url", ""))
+            if not username:
+                continue
+            profile = await self.get_profile(username)
+            if not profile:
+                continue
+            if person_name and self.name_similarity(person_name, profile.get("name")) < 0.75:
+                continue
+            search_text = " ".join([
+                result.get("title", ""), result.get("snippet", "")
+            ]).lower()
+            # Require the LinkedIn-derived slug to occur in the search result
+            # that connected the GitHub URL.
+            if slug.lower() not in search_text:
+                continue
+            return username
 
         return None
+
+    @staticmethod
+    def _github_username(url: str) -> Optional[str]:
+        parsed = urlparse(url)
+        if (parsed.hostname or "").lower() not in {"github.com", "www.github.com"}:
+            return None
+        parts = [part for part in parsed.path.split("/") if part]
+        if len(parts) != 1:
+            return None
+        if parts[0].lower() in {
+            "features", "topics", "trending", "collections", "marketplace",
+            "explore", "login", "signup", "settings", "orgs", "about",
+            "pricing", "security",
+        }:
+            return None
+        return parts[0]
 
     # ---------------------------------------------------------
     # GitHub user search
@@ -144,15 +175,9 @@ class GitHubSource:
         company: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
 
-        query_parts = []
-
-        if name:
-            query_parts.append(f'"{name}"')
-
-        if company:
-            query_parts.append(f'company:"{company}"')
-
-        query = " ".join(query_parts)
+        # GitHub user search has no company: qualifier. Search the public
+        # account name, then check each returned profile's name/company fields.
+        query = f'"{name}" in:name type:user' if name else "type:user"
 
         print(f'GitHub user search: "{query}"')
 
@@ -177,10 +202,12 @@ class GitHubSource:
         self,
         username: str,
     ) -> Optional[Dict[str, Any]]:
-
-        return await self._get(
-            f"{GITHUB_API}/users/{username}"
-        )
+        key = username.lower()
+        if key not in self._profile_cache:
+            self._profile_cache[key] = await self._get(
+                f"{GITHUB_API}/users/{username}"
+            )
+        return self._profile_cache[key]
 
     # ---------------------------------------------------------
     # Public commits
@@ -329,6 +356,11 @@ class GitHubSource:
             or f"https://github.com/{username}",
             "github_username": username,
             "github_name": github_name,
+            "github_company": profile.get("company"),
+            "company_domain": person.get("company_domain"),
+            "evidence_text": " ".join([
+                str(github_name or ""), str(profile.get("company") or "")
+            ]),
             "identity_score": similarity,
             "evidence": {
                 "github_profile": True,
@@ -382,6 +414,8 @@ class GitHubSource:
                     "source": "github_public_commit",
                     "source_url": html_url,
                     "github_commit_author": commit_name,
+                    "company_domain": person.get("company_domain"),
+                    "evidence_text": str(commit_name or ""),
                     "identity_score": similarity,
                     "evidence": {
                         "github_public_commit": True,
@@ -418,87 +452,64 @@ class GitHubSource:
 
         candidates: List[Dict[str, Any]] = []
 
-        # -----------------------------------------------------
-        # 1. Direct LinkedIn-slug → GitHub lookup
-        # -----------------------------------------------------
-
-        username = await self.find_username_from_linkedin_slug(
-            linkedin_url
-        )
-
-        # -----------------------------------------------------
-        # 2. GitHub search fallback
-        # -----------------------------------------------------
-
-        if not username:
-
-            users = await self.search_users(
-                name=name,
-                company=company,
-            )
-
-            for user in users:
-
-                login = user.get("login")
-
-                if not login:
-                    continue
-
-                profile = await self.get_profile(login)
-
-                if not profile:
-                    continue
-
-                similarity = self.name_similarity(
-                    name,
-                    profile.get("name"),
-                )
-
-                if similarity >= 0.5:
-
-                    username = login
-
-                    print(
-                        f"GitHub candidate accepted: "
-                        f"{login}"
-                    )
-
-                    break
-
-        # -----------------------------------------------------
-        # 3. Profile email
-        # -----------------------------------------------------
-
-        if username:
-
-            profile = await self.get_profile(username)
-
-            if profile:
-
-                candidate = self.profile_email_candidate(
-                    person,
-                    profile,
-                    username,
-                )
-
-                if candidate:
-                    candidates.append(candidate)
-
-        # -----------------------------------------------------
-        # 4. Public commit emails
-        # -----------------------------------------------------
-
+        # Commit search is the most useful free source for published company
+        # aliases. Run it first and avoid extra profile searches when it yields
+        # a strong same-name address at the confirmed employer domain.
         commits = await self.search_public_commits(
             name=name,
             company=company,
         )
-
         candidates.extend(
             self.commit_email_candidates(
                 person,
                 commits,
             )
         )
+
+        company_domains = set(IdentityVerifier.known_domains(company))
+        if person.get("company_domain"):
+            company_domains.add(person["company_domain"].lower())
+        has_strong_work_commit = any(
+            item.get("identity_score", 0) >= 0.8
+            and item.get("email", "").rsplit("@", 1)[-1].lower() in company_domains
+            for item in candidates
+        )
+
+        if not has_strong_work_commit:
+            username = await self.find_username_from_linkedin_slug(
+                linkedin_url,
+                person_name=name,
+                company=company,
+            )
+
+            users = []
+            if not username:
+                users = await self.search_users(name=name, company=company)
+                for user in users:
+                    login = user.get("login")
+                    if not login:
+                        continue
+                    profile = await self.get_profile(login)
+                    if not profile:
+                        continue
+
+                    similarity = self.name_similarity(name, profile.get("name"))
+                    profile_company = (profile.get("company") or "").lower()
+                    company_match = bool(company) and company.lower() in profile_company
+                    # Keep same-name GitHub accounts for direct corporate
+                    # email matching. Personal address leads are accepted
+                    # later only when employer evidence is also present.
+                    if similarity >= 0.8 and (company_match or not profile_company):
+                        username = login
+                        print(f"GitHub candidate accepted: {login}")
+                        break
+
+            if username:
+                profile = await self.get_profile(username)
+                if profile:
+                    candidate = self.profile_email_candidate(person, profile, username)
+                    if candidate:
+                        candidates.append(candidate)
 
         # -----------------------------------------------------
         # 5. Deduplicate
@@ -521,7 +532,8 @@ class GitHubSource:
             print(
                 f"  {result['email']} "
                 f"| {result['source']} "
-                f"| score={result['identity_score']:.2f}"
+                f"| score={result['identity_score']:.2f} "
+                f"| source={result.get('source_url', '')}"
             )
 
         print(

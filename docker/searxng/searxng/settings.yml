@@ -1,7 +1,17 @@
 # Read the documentation before extending the defaults:
 # https://docs.searxng.org/admin/settings/
 
-use_default_settings: true
+use_default_settings:
+  # The other enabled general engines were repeatedly timing out or
+  # rate-limiting this private local instance. Yahoo returned LinkedIn staff
+  # profiles in a direct check, so use it as the current general search source.
+  engines:
+    keep_only:
+      - yahoo
+
+engines:
+  - name: yahoo
+    disabled: false
 
 general:
   instance_name: "Job Referral Agent Search"

@@ -18,13 +18,12 @@ async def main():
 
     print()
     print("=" * 70)
-    print("REFERRAL CONTACTS WITH PUBLIC EMAIL EVIDENCE")
+    print("REFERRAL CONTACTS AND PUBLIC EMAIL LEADS")
     print("=" * 70)
 
-    print(
-        f"\nContacts found: "
-        f"{len(contacts)} / 5"
-    )
+    email_count = sum(bool(contact.public_email) for contact in contacts)
+    print(f"\nRelevant contacts found: {len(contacts)} / 5")
+    print(f"Public email leads found: {email_count} / 5")
 
     for index, contact in enumerate(
         contacts,
@@ -49,6 +48,7 @@ async def main():
             "Email:",
             contact.public_email,
         )
+        print("Email type:", contact.email_type or "none")
         print(
             "Status:",
             contact.verification_status.value,

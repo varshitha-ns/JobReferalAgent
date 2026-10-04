@@ -16,8 +16,10 @@ class SearchEngine:
         self.base_url = (base_url or os.getenv(
             "SEARXNG_BASE_URL", "http://localhost:8080"
         )).rstrip("/")
+        self.last_error: Optional[str] = None
 
     async def search(self, query: str, limit: int = 10) -> List[Dict[str, str]]:
+        self.last_error = None
         params = {"q": query, "format": "json"}
         timeout = httpx.Timeout(connect=8.0, read=20.0, write=8.0, pool=8.0)
         try:
@@ -33,9 +35,11 @@ class SearchEngine:
                     )
             response.raise_for_status()
         except httpx.HTTPStatusError as error:
+            self.last_error = f"HTTP {error.response.status_code}"
             logger.warning("SearXNG returned HTTP %s for query %r", error.response.status_code, query)
             return []
         except httpx.HTTPError as error:
+            self.last_error = str(error)
             logger.warning("SearXNG request failed for query %r: %s", query, error)
             return []
 
@@ -44,9 +48,45 @@ class SearchEngine:
             try:
                 payload = response.json()
             except ValueError:
+                self.last_error = "Invalid JSON response"
                 logger.warning("SearXNG returned invalid JSON for query %r", query)
                 return []
-            return self._parse_json(payload, limit)
+            results = self._parse_json(payload, limit)
+            if not results:
+                # SearXNG's default engine bundle can return an empty result
+                # set when individual providers are throttled. Try Bing as a
+                # free fallback through the same local SearXNG instance.
+                # Bing's fallback did not honor LinkedIn-focused queries in
+                # this setup, so keep it for general web/email lookups only.
+                if "linkedin.com/in" not in query.lower():
+                    try:
+                        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                            fallback = await client.get(
+                                f"{self.base_url}/search",
+                                params={"q": query, "format": "json", "engines": "bing"},
+                            )
+                        fallback.raise_for_status()
+                        fallback_payload = fallback.json()
+                        fallback_results = self._parse_json(fallback_payload, limit)
+                        if fallback_results:
+                            self.last_error = None
+                            return fallback_results
+                        payload = fallback_payload
+                    except (httpx.HTTPError, ValueError) as error:
+                        logger.warning("SearXNG Bing fallback failed for query %r: %s", query, error)
+                unresponsive = payload.get("unresponsive_engines", [])
+                failed_engines = [
+                    str(item[0])
+                    for item in unresponsive
+                    if isinstance(item, (list, tuple)) and item
+                ]
+                if failed_engines:
+                    self.last_error = (
+                        "No results; search engines unavailable: "
+                        + ", ".join(dict.fromkeys(failed_engines))
+                    )
+                    logger.warning("SearXNG had no results; unavailable engines: %s", self.last_error)
+            return results
 
         return self._parse_html(response.text, limit)
 

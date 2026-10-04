@@ -56,8 +56,6 @@ class PeopleDiscoveryAgent:
                 if linkedin_url in seen_linkedin:
                     continue
 
-                seen_linkedin.add(linkedin_url)
-
                 person = self._create_person(
                     result=result,
                     linkedin_url=linkedin_url,
@@ -65,6 +63,7 @@ class PeopleDiscoveryAgent:
                 )
 
                 if person:
+                    seen_linkedin.add(linkedin_url)
                     people.append(person)
 
                 if len(people) >= limit:
@@ -79,26 +78,16 @@ class PeopleDiscoveryAgent:
         location: str | None,
     ) -> List[str]:
 
-        # Use a location-qualified query first, then broaden so a location
-        # mismatch in a search snippet does not hide otherwise relevant staff.
+        # Use the plain query form validated against this instance. Prefer the
+        # job location, then broaden once if fewer than the requested number of
+        # profiles are found. The previous seven-query fan-out exhausted free
+        # providers before email discovery could run.
         queries = []
         if location:
-            queries.append(
-                f'site:linkedin.com/in/ "{company}" "{job_title}" "{location}"'
-            )
-        role_queries = [
-            job_title,
-            "Software Engineer",
-            "Senior Software Engineer",
-            "Staff Software Engineer",
-            "Engineering Manager",
-            "Technical Recruiter",
-            "Talent Acquisition",
-        ]
-        for role in role_queries:
-            query = f'site:linkedin.com/in/ "{company}" "{role}"'
-            if query not in queries:
-                queries.append(query)
+            queries.append(f"site:linkedin.com/in {company} {job_title} {location}")
+        broad_query = f"site:linkedin.com/in {company} {job_title}"
+        if broad_query not in queries:
+            queries.append(broad_query)
         return queries
 
     @staticmethod
@@ -245,6 +234,11 @@ class PeopleDiscoveryAgent:
     ) -> str | None:
 
         roles = [
+            "Associate Software Engineer",
+            "Associate AI Engineer",
+            "Machine Learning Engineer",
+            "AI Engineer",
+            "ML Engineer",
             "Principal Software Engineer",
             "Staff Software Engineer",
             "Senior Software Engineer",

@@ -18,11 +18,34 @@ interface ContentResponse {
   error?: string;
 }
 
+interface ContactEvidence {
+  source_url: string;
+  source_type: string;
+  evidence: string;
+}
+
+interface ReferralContact {
+  name: string;
+  current_company?: string | null;
+  current_role?: string | null;
+  linkedin_url?: string | null;
+  github_url?: string | null;
+  public_email?: string | null;
+  email_type?: "work" | "personal_candidate" | null;
+  email_verified: boolean;
+  email_domain_has_mx?: boolean | null;
+  email_verification_method?: string | null;
+  contact_evidence: ContactEvidence[];
+  relevance_reasons: string[];
+}
+
 function App() {
   const [job, setJob] = useState<JobData | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [message, setMessage] = useState<string>("");
   const [error, setError] = useState<boolean>(false);
+  const [contacts, setContacts] = useState<ReferralContact[]>([]);
+  const [analysis, setAnalysis] = useState<Record<string, unknown> | null>(null);
 
   // Analyze the currently opened job page
   const analyzeJob = async (): Promise<void> => {
@@ -30,6 +53,8 @@ function App() {
     setMessage("");
     setError(false);
     setJob(null);
+    setContacts([]);
+    setAnalysis(null);
 
     try {
       // STEP 1: Get currently active Chrome tab
@@ -83,7 +108,40 @@ function App() {
       console.log("Backend Response:", result);
 
       if (result.success) {
-        setMessage("Job analyzed successfully!");
+        const profile = result.job as Record<string, unknown> | undefined;
+        setAnalysis(profile ?? null);
+
+        if (!profile?.company || !profile?.title) {
+          setMessage("Job analyzed, but company or role was not extracted. Contact search was skipped.");
+          setError(false);
+          return;
+        }
+
+        setMessage("Job analyzed. Finding relevant people and public ways to contact them...");
+        const contactsResponse = await fetch("http://127.0.0.1:8000/contacts/find", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            company: profile.company,
+            job_title: profile.title,
+            location: profile.location ?? null,
+            limit: 5,
+          }),
+        });
+        if (!contactsResponse.ok) {
+          throw new Error(`Contact search failed: ${contactsResponse.status}`);
+        }
+        const contactResult = await contactsResponse.json();
+        const foundContacts = (contactResult.contacts ?? []) as ReferralContact[];
+        setContacts(foundContacts);
+        const emailCount = foundContacts.filter((contact) => contact.public_email).length;
+        setMessage(
+          foundContacts.length
+            ? `Found ${foundContacts.length} relevant person/people; ${emailCount} public email lead(s). Use LinkedIn where no email is listed.`
+            : contactResult.search_available === false
+              ? `Public search is unavailable: ${contactResult.search_error ?? "check SearXNG and its configured search engines"}.`
+              : "No relevant people were found. Try a broader job title or location."
+        );
         setError(false);
       } else {
         throw new Error(
@@ -159,6 +217,54 @@ function App() {
               : job.description}
           </p>
         </div>
+      )}
+
+      {analysis && (
+        <div className="job-card">
+          <h2>Analyzed Role</h2>
+          <p><strong>Company:</strong> {String(analysis.company ?? "Not identified")}</p>
+          <p><strong>Role:</strong> {String(analysis.title ?? "Not identified")}</p>
+          {Array.isArray(analysis.required_skills) && (
+            <p><strong>Skills:</strong> {(analysis.required_skills as string[]).join(", ")}</p>
+          )}
+        </div>
+      )}
+
+      {contacts.length > 0 && (
+        <section className="contacts-card">
+          <h2>People to Contact</h2>
+          <p className="email-note">
+            Public company emails have source evidence. Personal email leads come from public GitHub evidence and may be stale or belong to someone with a similar name. No mailbox is verified. Use LinkedIn when no email is listed.
+          </p>
+          {contacts.map((contact) => (
+            <article className="contact-item" key={`${contact.name}-${contact.public_email}`}>
+              <h3>{contact.name}</h3>
+              <p>{contact.current_role ?? "Role not identified"} | {contact.current_company ?? ""}</p>
+              {contact.public_email ? (
+                <p>
+                  <strong>{contact.email_type === "personal_candidate" ? "Public personal email lead:" : "Public work email:"}</strong>{" "}
+                  <a href={`mailto:${contact.public_email}`}>{contact.public_email}</a>
+                </p>
+              ) : (
+                <p className="email-note">No suitable public email found. Contact through LinkedIn.</p>
+              )}
+              {contact.email_type !== "personal_candidate" && contact.public_email && (
+                <p className="email-note">
+                  Company mail routing: {contact.email_domain_has_mx === true ? "MX record found" : contact.email_domain_has_mx === false ? "No MX record found" : "not checked"}. This does not verify this mailbox.
+                </p>
+              )}
+              <div className="contact-links">
+                {contact.linkedin_url && <a href={contact.linkedin_url} target="_blank" rel="noopener noreferrer">LinkedIn profile</a>}
+                {contact.github_url && <a href={contact.github_url} target="_blank" rel="noopener noreferrer">GitHub profile</a>}
+                {contact.contact_evidence.map((evidence) => (
+                  <a key={evidence.source_url} href={evidence.source_url} target="_blank" rel="noopener noreferrer">
+                    {contact.public_email ? "Email source" : "Profile evidence"}: {evidence.source_type}
+                  </a>
+                ))}
+              </div>
+            </article>
+          ))}
+        </section>
       )}
 
       {/* Status Message */}
