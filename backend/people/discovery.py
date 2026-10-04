@@ -78,16 +78,35 @@ class PeopleDiscoveryAgent:
         location: str | None,
     ) -> List[str]:
 
-        # Use the plain query form validated against this instance. Prefer the
-        # job location, then broaden once if fewer than the requested number of
-        # profiles are found. The previous seven-query fan-out exhausted free
-        # providers before email discovery could run.
+        # Discover peers and the people most likely to route a referral.
+        # Search exact role first, then broaden to engineering leaders and a
+        # recruiting route. Avoid punctuation in locations because free search
+        # providers can treat commas as query operators.
+        clean_location = " ".join((location or "").replace(",", " ").split())
+        role = " ".join(job_title.replace(",", " ").split())
         queries = []
-        if location:
-            queries.append(f"site:linkedin.com/in {company} {job_title} {location}")
-        broad_query = f"site:linkedin.com/in {company} {job_title}"
-        if broad_query not in queries:
-            queries.append(broad_query)
+
+        def add_query(*terms: str) -> None:
+            parts = ["site:linkedin.com/in", company, *terms]
+            if clean_location:
+                parts.append(clean_location)
+            query = " ".join(" ".join(parts).split())
+            if query not in queries:
+                queries.append(query)
+
+        add_query(role)
+        normalized_role = role.lower()
+        if "software" in normalized_role or "engineer" in normalized_role:
+            add_query("Software Engineer")
+        if any(term in normalized_role for term in ("data engineer", "data engineering", "adf")):
+            add_query("Data Engineer")
+            add_query("Data Engineering Manager")
+        if any(term in normalized_role for term in ("ai", "machine learning", "ml")):
+            add_query("AI Engineer")
+        add_query("Senior Software Engineer")
+        add_query("Engineering Manager")
+        add_query("Technical Recruiter")
+        add_query("Talent Acquisition")
         return queries
 
     @staticmethod
@@ -234,6 +253,14 @@ class PeopleDiscoveryAgent:
     ) -> str | None:
 
         roles = [
+            "Principal Data Engineer",
+            "Staff Data Engineer",
+            "Senior Data Engineer",
+            "Associate Data Engineer",
+            "Data Engineering Manager",
+            "Data Engineering Lead",
+            "Data Engineer",
+            "Analytics Engineer",
             "Associate Software Engineer",
             "Associate AI Engineer",
             "Machine Learning Engineer",
@@ -247,6 +274,8 @@ class PeopleDiscoveryAgent:
             "Engineering Lead",
             "Technical Lead",
             "Tech Lead",
+            "Director of Engineering",
+            "Head of Engineering",
             "Technical Recruiter",
             "Recruiter",
             "Talent Acquisition",

@@ -27,7 +27,6 @@ class IdentityVerifier:
         "wipro": {"wipro.com"},
         "capgemini": {"capgemini.com"},
         "accenture": {"accenture.com"},
-        "conga": {"conga.com"},
     }
     PRIMARY_COMPANY_DOMAINS = {
         "microsoft": "microsoft.com",
@@ -41,7 +40,6 @@ class IdentityVerifier:
         "wipro": "wipro.com",
         "capgemini": "capgemini.com",
         "accenture": "accenture.com",
-        "conga": "conga.com",
     }
 
     GENERIC_ROLE_WORDS = {

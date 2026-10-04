@@ -27,6 +27,7 @@ class PublicEmailFinder:
         self.search_url = search_url.rstrip("/")
         self.search_engine = search_engine or SearchEngine(self.search_url)
         self._robots_cache: Dict[str, Any] = {}
+        self._company_domain_cache: Dict[str, Optional[str]] = {}
 
     # =========================================================
     # SEARCH
@@ -44,6 +45,10 @@ class PublicEmailFinder:
         known = IdentityVerifier.primary_domain(company)
         if known:
             return known
+
+        cache_key = " ".join(company.casefold().split())
+        if cache_key in self._company_domain_cache:
+            return self._company_domain_cache[cache_key]
 
         results = await self.search(f'"{company}" official website', limit=10)
         company_terms = [
@@ -68,7 +73,9 @@ class PublicEmailFinder:
                 or any(label.startswith(term + "-") for label in host_labels)
                 for term in company_terms
             ):
+                self._company_domain_cache[cache_key] = host
                 return host
+        self._company_domain_cache[cache_key] = None
         return None
 
     # =========================================================

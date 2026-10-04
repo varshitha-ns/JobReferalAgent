@@ -51,23 +51,32 @@ class ContactPipeline:
             limit=self.max_candidates,
         )
 
+        # Do contact checks in referral-priority order so scarce public
+        # evidence and the final five slots favor people who can route a
+        # referral. Email availability breaks ties rather than outranking role.
+        qualified: List[PersonProfile] = []
+        for person in people:
+            if not self.identity.verify_company(person, company):
+                person.verification_status = VerificationStatus.REJECTED
+                continue
+            self.identity.mark_company_verified(person)
+            self.relevance.classify(person)
+            if not self.identity.verify_role(person, job_title):
+                person.verification_status = VerificationStatus.REJECTED
+                continue
+            self.identity.mark_role_verified(person)
+            qualified.append(person)
+        people = sorted(
+            qualified,
+            key=lambda item: self.relevance.sort_key(item, job_title),
+        )
+
         email_contacts: List[PersonProfile] = []
         fallback_contacts: List[PersonProfile] = []
         seen_emails = set()
         for person in people:
             if len(email_contacts) >= self.target_contacts:
                 break
-
-            if not self.identity.verify_company(person, company):
-                person.verification_status = VerificationStatus.REJECTED
-                continue
-            self.identity.mark_company_verified(person)
-
-            person = self.relevance.classify(person)
-            if not self.identity.verify_role(person, job_title):
-                person.verification_status = VerificationStatus.REJECTED
-                continue
-            self.identity.mark_role_verified(person)
 
             person_data = {
                 "name": person.name,
@@ -150,4 +159,7 @@ class ContactPipeline:
 
         # Prefer people with a sourced address. If public email evidence is
         # scarce, fill the remainder with relevant profiles and LinkedIn URLs.
-        return (email_contacts + fallback_contacts)[:self.target_contacts]
+        return sorted(
+            email_contacts + fallback_contacts,
+            key=lambda item: self.relevance.sort_key(item, job_title),
+        )[:self.target_contacts]

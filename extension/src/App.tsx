@@ -28,6 +28,7 @@ interface ReferralContact {
   name: string;
   current_company?: string | null;
   current_role?: string | null;
+  contact_type: string;
   linkedin_url?: string | null;
   github_url?: string | null;
   public_email?: string | null;
@@ -234,12 +235,13 @@ function App() {
         <section className="contacts-card">
           <h2>People to Contact</h2>
           <p className="email-note">
-            Public company emails have source evidence. Personal email leads come from public GitHub evidence and may be stale or belong to someone with a similar name. No mailbox is verified. Use LinkedIn when no email is listed.
+            Contacts are ranked by likely referral usefulness from their public job titles. Check their profile and team before reaching out. Emails require public source evidence; no mailbox is verified.
           </p>
           {contacts.map((contact) => (
             <article className="contact-item" key={`${contact.name}-${contact.public_email}`}>
               <h3>{contact.name}</h3>
               <p>{contact.current_role ?? "Role not identified"} | {contact.current_company ?? ""}</p>
+              <p className="email-note">Referral route: {contact.contact_type.replaceAll("_", " ")}</p>
               {contact.public_email ? (
                 <p>
                   <strong>{contact.email_type === "personal_candidate" ? "Public personal email lead:" : "Public work email:"}</strong>{" "}
