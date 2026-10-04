@@ -25,14 +25,14 @@ async def find_contacts(request: ContactSearchRequest):
             job_title=request.job_title,
             location=request.location,
         )
-        search_available = pipeline.search_engine.last_error is None
+        search_available = pipeline.search_engine.any_results
         return {
             "success": True,
             "requested": request.limit,
             "found": len(contacts),
             "contacts": [contact.model_dump(mode="json") for contact in contacts],
             "search_available": search_available,
-            "search_error": pipeline.search_engine.last_error,
+            "search_error": None if search_available else pipeline.search_engine.last_error,
             "message": (
                 "Relevant people and available public outreach routes found. Email mailbox ownership is not verified."
                 if contacts

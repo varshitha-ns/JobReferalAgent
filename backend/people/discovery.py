@@ -60,6 +60,7 @@ class PeopleDiscoveryAgent:
                     result=result,
                     linkedin_url=linkedin_url,
                     company=company,
+                    target_location=location,
                 )
 
                 if person:
@@ -154,6 +155,7 @@ class PeopleDiscoveryAgent:
         result: dict,
         linkedin_url: str,
         company: str,
+        target_location: str | None = None,
     ) -> PersonProfile | None:
 
         title = (result.get("title", "") or "").strip()
@@ -180,6 +182,21 @@ class PeopleDiscoveryAgent:
         if not role:
             return None
 
+        person_location = self._extract_location(evidence_text)
+        location_verified = self._verify_location(
+            person_location,
+            evidence_text,
+            target_location,
+        )
+        if location_verified is False:
+            # Don't present an explicitly different city as a local contact.
+            return None
+        if not person_location and location_verified is True and target_location:
+            person_location = target_location.split(",", 1)[0].strip()
+
+        if self._is_former_employee(title, snippet, company):
+            return None
+
         evidence = ContactEvidence(
             source_url=result["url"],
             source_type="public_search_result",
@@ -202,10 +219,61 @@ class PeopleDiscoveryAgent:
             name=name,
             current_company=company,
             current_role=role,
+            location=person_location,
+            location_verified=location_verified,
             linkedin_url=linkedin_url,
             relevance_reasons=reasons,
             contact_evidence=[evidence],
         )
+
+    @staticmethod
+    def _extract_location(text: str) -> str | None:
+        import re
+
+        match = re.search(r"\bLocation:\s*([^·|\n]+)", text, re.IGNORECASE)
+        return match.group(1).strip(" .,") if match else None
+
+    @classmethod
+    def _verify_location(
+        cls,
+        profile_location: str | None,
+        evidence: str,
+        target_location: str | None,
+    ) -> bool | None:
+        if not target_location:
+            return None
+        target_city = target_location.split(",", 1)[0].strip().casefold()
+        if target_city in {"bangalore", "bengaluru"}:
+            aliases = {"bangalore", "bengaluru"}
+        else:
+            aliases = {target_city} if target_city else set()
+        evidence_lower = evidence.casefold()
+        if any(alias and alias in evidence_lower for alias in aliases):
+            return True
+        if not profile_location:
+            return None
+        place = profile_location.casefold()
+        if any(alias and alias in place for alias in aliases):
+            return True
+        postal_prefixes = {
+            "bengaluru": ("560",), "bangalore": ("560",),
+            "hyderabad": ("500",), "chennai": ("600",),
+            "mumbai": ("400",), "pune": ("411",),
+            "delhi": ("110",), "gurugram": ("122",), "gurgaon": ("122",),
+            "noida": ("201",),
+        }
+        digits = "".join(char for char in place if char.isdigit())
+        if digits and any(digits.startswith(prefix) for prefix in postal_prefixes.get(target_city, ())):
+            return True
+        # Country/state-only labels are too coarse to confirm or contradict a
+        # city. A named different metro/region is an explicit mismatch.
+        coarse = {
+            "india", "karnataka", "united states", "usa", "united kingdom",
+            "uk", "canada", "germany", "france", "australia",
+        }
+        if place.strip(" .,") in coarse:
+            return None
+        return False
 
     @staticmethod
     def _extract_name(
@@ -218,17 +286,11 @@ class PeopleDiscoveryAgent:
         # Typical search result:
         # "John Doe - Software Engineer - Microsoft | LinkedIn"
 
-        cleaned = title.replace(
-            " | LinkedIn",
-            "",
-        ).strip()
+        import re
 
-        parts = cleaned.split(" - ")
-
-        if not parts:
-            return None
-
-        name = parts[0].strip()
+        cleaned = re.sub(r"\s*\|\s*LinkedIn\s*$", "", title, flags=re.IGNORECASE).strip()
+        parts = re.split(r"\s+[\-–—|]\s+", cleaned, maxsplit=1)
+        name = parts[0].strip() if parts else ""
 
         if not name:
             return None
@@ -246,6 +308,45 @@ class PeopleDiscoveryAgent:
             return None
 
         return name
+
+    @staticmethod
+    def _is_former_employee(title: str, snippet: str, company: str) -> bool:
+        import re
+
+        title_text = title.casefold()
+        snippet_text = snippet.casefold()
+        company_words = [
+            word.casefold() for word in re.findall(r"[A-Za-z0-9]+", company)
+            if len(word) >= 3
+        ]
+        if not company_words:
+            return False
+        company_in_title = any(word in title_text for word in company_words)
+        company_in_snippet = any(word in snippet_text for word in company_words)
+        if not company_in_snippet:
+            return False
+
+        former_marker = bool(re.search(r"\b(ex|former|formerly|previously)\b", title_text))
+        if former_marker and not company_in_title:
+            return True
+
+        last_company_token = re.escape(company_words[-1])
+        date_range = (
+            r"(?:19|20)\d{2}\s*[–—-]\s*"
+            r"(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\.?\s*)?"
+            r"(?:19|20)\d{2}"
+        )
+        company_date = re.search(
+            rf"\b{last_company_token}\b.{{0,100}}?{date_range}",
+            snippet_text,
+            re.IGNORECASE,
+        )
+        current_company = re.search(
+            rf"\b{last_company_token}\b.{{0,100}}?\b(present|current|now)\b",
+            snippet_text,
+            re.IGNORECASE,
+        )
+        return not company_in_title and bool(company_date) and not current_company
 
     @staticmethod
     def _extract_role(

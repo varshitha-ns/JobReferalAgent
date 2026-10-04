@@ -138,9 +138,20 @@ class IdentityVerifier:
         # Company must be present in the actual public profile search evidence;
         # current_company alone may have been populated from the query.
         text = " ".join(item.evidence for item in person.contact_evidence)
-        expected = cls.tokens(expected_company)
+        # Ignore punctuation initials in legal names ("A.P.") and allow
+        # public profiles to use the employer's distinctive brand token
+        # ("Maersk") without the full legal name.
+        ordered_tokens = [
+            token.casefold() for token in re.findall(r"[a-z0-9]+", expected_company, re.I)
+            if len(token) >= 3
+        ]
+        expected = set(ordered_tokens)
         actual = cls.tokens(text)
-        return bool(expected) and expected.issubset(actual)
+        if not expected:
+            return False
+        distinctive = ordered_tokens[-1]
+        matched = expected & actual
+        return distinctive in actual and len(matched) / len(expected) >= 0.5
 
     @classmethod
     def verify_role(cls, person: PersonProfile, job_title: str) -> bool:

@@ -109,6 +109,7 @@ class ContactRelevance:
     def sort_key(cls, person: PersonProfile, job_title: str = "") -> tuple:
         # Point-of-contact strength leads; sourced email breaks close ties.
         return (
+            0 if person.location_verified is True else 1,
             -cls.priority(person, job_title),
             not bool(person.public_email),
             (person.name or "").casefold(),

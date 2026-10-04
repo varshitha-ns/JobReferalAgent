@@ -17,6 +17,7 @@ class SearchEngine:
             "SEARXNG_BASE_URL", "http://localhost:8080"
         )).rstrip("/")
         self.last_error: Optional[str] = None
+        self.any_results = False
 
     async def search(self, query: str, limit: int = 10) -> List[Dict[str, str]]:
         self.last_error = None
@@ -52,6 +53,8 @@ class SearchEngine:
                 logger.warning("SearXNG returned invalid JSON for query %r", query)
                 return []
             results = self._parse_json(payload, limit)
+            if results:
+                self.any_results = True
             if not results:
                 # SearXNG's default engine bundle can return an empty result
                 # set when individual providers are throttled. Try Bing as a
@@ -69,6 +72,7 @@ class SearchEngine:
                         fallback_payload = fallback.json()
                         fallback_results = self._parse_json(fallback_payload, limit)
                         if fallback_results:
+                            self.any_results = True
                             self.last_error = None
                             return fallback_results
                         payload = fallback_payload
@@ -88,7 +92,10 @@ class SearchEngine:
                     logger.warning("SearXNG had no results; unavailable engines: %s", self.last_error)
             return results
 
-        return self._parse_html(response.text, limit)
+        results = self._parse_html(response.text, limit)
+        if results:
+            self.any_results = True
+        return results
 
     @staticmethod
     def _parse_html(document: str, limit: int) -> List[Dict[str, str]]:

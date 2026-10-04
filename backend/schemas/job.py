@@ -8,6 +8,8 @@ class JobData(BaseModel):
     title: str
     description: str
     hostname: str
+    company: Optional[str] = None
+    location: Optional[str] = None
 
 
 class JobProfile(BaseModel):

@@ -9,6 +9,8 @@ interface JobData {
   title: string;
   description: string;
   hostname: string;
+  company?: string;
+  location?: string;
 }
 
 // Response received from the content script
@@ -28,6 +30,8 @@ interface ReferralContact {
   name: string;
   current_company?: string | null;
   current_role?: string | null;
+  location?: string | null;
+  location_verified?: boolean | null;
   contact_type: string;
   linkedin_url?: string | null;
   github_url?: string | null;
@@ -196,6 +200,8 @@ function App() {
           <p>
             <strong>Website:</strong> {job.hostname}
           </p>
+          {job.company && <p><strong>Company:</strong> {job.company}</p>}
+          {job.location && <p><strong>Location:</strong> {job.location}</p>}
 
           <p>
             <strong>Job URL:</strong>{" "}
@@ -242,6 +248,7 @@ function App() {
               <h3>{contact.name}</h3>
               <p>{contact.current_role ?? "Role not identified"} | {contact.current_company ?? ""}</p>
               <p className="email-note">Referral route: {contact.contact_type.replaceAll("_", " ")}</p>
+              {contact.location && <p className="email-note">Profile location: {contact.location}{contact.location_verified === true ? " (matched)" : contact.location_verified === false ? " (different from job location)" : " (not confirmed)"}</p>}
               {contact.public_email ? (
                 <p>
                   <strong>{contact.email_type === "personal_candidate" ? "Public personal email lead:" : "Public work email:"}</strong>{" "}

@@ -35,6 +35,7 @@ class PersonProfile(BaseModel):
     current_company: Optional[str] = None
     current_role: Optional[str] = None
     location: Optional[str] = None
+    location_verified: Optional[bool] = None
 
     linkedin_url: Optional[str] = None
     github_url: Optional[str] = None
