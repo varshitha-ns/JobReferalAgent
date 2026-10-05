@@ -21,7 +21,11 @@ Designs, develops, tests, delivers and maintains business applications."""
 
 
 class FakeOllama:
+    def __init__(self):
+        self.calls = 0
+
     async def generate(self, **_kwargs):
+        self.calls += 1
         # Reproduce the malformed extraction from the real listing test.
         return {
             "company": "A.P. Moller - Maers: India",
@@ -57,6 +61,24 @@ class MaerskRegressionTests(unittest.TestCase):
         self.assertEqual(profile.title, "Associate Software Engineer")
         self.assertEqual(profile.required_skills, ["Python, SQL"])
         self.assertFalse(hasattr(profile, "unexpected_model_key"))
+
+    def test_complete_page_identity_skips_slow_optional_llm(self):
+        analyzer = LLMJobAnalyzer()
+        fake_ollama = FakeOllama()
+        analyzer.ollama = fake_ollama
+        job = JobData(
+            url="https://www.coinbase.com/careers/positions/example",
+            title="Machine Learning Engineer",
+            description="Build ML systems.",
+            hostname="www.coinbase.com",
+            company="Coinbase",
+            location="Remote - India",
+        )
+        profile = asyncio.run(analyzer.analyze(job))
+        self.assertEqual(profile.company, "Coinbase")
+        self.assertEqual(profile.title, "Machine Learning Engineer")
+        self.assertEqual(profile.location, "Remote - India")
+        self.assertEqual(fake_ollama.calls, 0)
 
     def test_company_source_match_uses_distinctive_brand(self):
         person = PersonProfile(

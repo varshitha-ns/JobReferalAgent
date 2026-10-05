@@ -22,7 +22,9 @@ class SearchEngine:
     async def search(self, query: str, limit: int = 10) -> List[Dict[str, str]]:
         self.last_error = None
         params = {"q": query, "format": "json"}
-        timeout = httpx.Timeout(connect=8.0, read=20.0, write=8.0, pool=8.0)
+        # Keep each free-provider request bounded; contact discovery runs a
+        # focused batch concurrently, so slow engines should not stall the UI.
+        timeout = httpx.Timeout(connect=4.0, read=8.0, write=4.0, pool=4.0)
         try:
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
                 response = await client.get(f"{self.base_url}/search", params=params)

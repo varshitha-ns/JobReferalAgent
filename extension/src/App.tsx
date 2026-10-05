@@ -47,6 +47,7 @@ interface ReferralContact {
 function App() {
   const [job, setJob] = useState<JobData | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
+  const [stage, setStage] = useState<string>("idle");
   const [message, setMessage] = useState<string>("");
   const [error, setError] = useState<boolean>(false);
   const [contacts, setContacts] = useState<ReferralContact[]>([]);
@@ -55,6 +56,7 @@ function App() {
   // Analyze the currently opened job page
   const analyzeJob = async (): Promise<void> => {
     setLoading(true);
+    setStage("extracting");
     setMessage("");
     setError(false);
     setJob(null);
@@ -88,6 +90,8 @@ function App() {
 
       // STEP 3: Update extension UI
       setJob(extractedJob);
+      setStage("analyzing");
+      setMessage("Job details extracted. Preparing contact search...");
 
       // STEP 4: Send extracted job to FastAPI backend
       const backendResponse = await fetch(
@@ -122,7 +126,8 @@ function App() {
           return;
         }
 
-        setMessage("Job analyzed. Finding relevant people and public ways to contact them...");
+        setStage("searching");
+        setMessage("Searching public profiles for relevant people...");
         const contactsResponse = await fetch("http://127.0.0.1:8000/contacts/find", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -164,6 +169,7 @@ function App() {
       setMessage(errorMessage);
       setError(true);
     } finally {
+      setStage("idle");
       setLoading(false);
     }
   };
@@ -185,7 +191,13 @@ function App() {
         onClick={analyzeJob}
         disabled={loading}
       >
-        {loading ? "Analyzing Job..." : "Analyze Current Job"}
+        {loading
+          ? stage === "searching"
+            ? "Finding Contacts..."
+            : stage === "extracting"
+              ? "Reading Job..."
+              : "Preparing Search..."
+          : "Analyze Current Job"}
       </button>
 
       {/* Extracted Job Information */}

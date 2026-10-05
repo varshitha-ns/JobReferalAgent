@@ -78,17 +78,23 @@ JOB DESCRIPTION:
 {job.description}
 """
 
-        try:
-            result = await self.ollama.generate(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-            )
-        except Exception as error:
-            # Preserve deterministic company/title/location extraction if the
-            # optional local LLM is unavailable; leave skills empty instead
-            # of failing the whole referral flow.
-            logger.warning("Ollama job analysis failed; using page metadata: %s", error)
+        # Referral discovery only needs a reliable company and title. If the
+        # page extractor already supplied both, don't make contact search wait
+        # for an often-slow local model to produce optional skills/summary.
+        if job.company and job.title.strip():
+            logger.info("Using extracted job identity; skipping optional Ollama analysis")
             result = {}
+        else:
+            try:
+                result = await self.ollama.generate(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                )
+            except Exception as error:
+                # Preserve deterministic company/title/location extraction if
+                # the optional local LLM is unavailable.
+                logger.warning("Ollama job analysis failed; using page metadata: %s", error)
+                result = {}
         if not isinstance(result, dict):
             result = {}
 

@@ -1,4 +1,5 @@
 from typing import List
+import asyncio
 import logging
 from urllib.parse import urlparse
 
@@ -31,19 +32,26 @@ class PeopleDiscoveryAgent:
             location,
         )
 
+        # Run a small, focused batch concurrently. Serial searches made the
+        # popup appear stuck when one free search provider was slow.
+        search_results = await asyncio.gather(
+            *(
+                asyncio.wait_for(
+                    self.search_engine.search(query=query, limit=10),
+                    timeout=14.0,
+                )
+                for query in queries
+            ),
+            return_exceptions=True,
+        )
+
         people = []
         seen_linkedin = set()
 
-        for query in queries:
-
+        for query, results in zip(queries, search_results):
             print(f"\nSearching: {query}")
-
-            try:
-                results = await self.search_engine.search(query=query, limit=10)
-            except Exception as error:
-                # A failed query/source must not stop discovery from trying
-                # the remaining role queries.
-                logger.warning("People search failed for %r: %s", query, error)
+            if isinstance(results, Exception):
+                logger.warning("People search failed for %r: %s", query, results)
                 continue
 
             for result in results:
@@ -104,7 +112,13 @@ class PeopleDiscoveryAgent:
             add_query("Data Engineering Manager")
         if any(term in normalized_role for term in ("ai", "machine learning", "ml")):
             add_query("AI Engineer")
-        add_query("Senior Software Engineer")
+        if any(term in normalized_role for term in ("machine learning", "ml", "ai")):
+            add_query("Machine Learning Engineer")
+            add_query("AI Engineer")
+        elif "data" in normalized_role:
+            add_query("Data Engineer")
+        elif "engineer" in normalized_role or "software" in normalized_role:
+            add_query("Software Engineer")
         add_query("Engineering Manager")
         add_query("Technical Recruiter")
         add_query("Talent Acquisition")

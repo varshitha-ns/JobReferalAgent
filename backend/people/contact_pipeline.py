@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from typing import List
 
 from people.discovery import PeopleDiscoveryAgent
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 class ContactPipeline:
     """Find up to five relevant referral contacts and their public routes."""
 
-    def __init__(self, target_contacts: int = 5, max_candidates: int = 40):
+    def __init__(self, target_contacts: int = 5, max_candidates: int = 12):
         self.target_contacts = min(max(target_contacts, 1), 5)
         self.max_candidates = max(max_candidates, self.target_contacts)
         self.search_engine = SearchEngine()
@@ -74,7 +75,10 @@ class ContactPipeline:
         email_contacts: List[PersonProfile] = []
         fallback_contacts: List[PersonProfile] = []
         seen_emails = set()
-        for person in people:
+        # Don't let uncertain, optional email enrichment hold every contact
+        # card hostage. Try the highest-ranked candidates only and put a hard
+        # time budget on each lookup; a LinkedIn route remains useful alone.
+        for person in people[:self.target_contacts]:
             if len(email_contacts) >= self.target_contacts:
                 break
 
@@ -85,7 +89,10 @@ class ContactPipeline:
                 "linkedin_url": person.linkedin_url,
             }
             try:
-                candidates = await self.email_discovery.discover(person_data)
+                candidates = await asyncio.wait_for(
+                    self.email_discovery.discover(person_data),
+                    timeout=2.5,
+                )
             except Exception as error:
                 logger.warning("Email discovery failed for %s: %s", person.name, error)
                 candidates = []
