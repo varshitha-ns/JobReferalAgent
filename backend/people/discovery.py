@@ -1,6 +1,7 @@
 from typing import List
 import asyncio
 import logging
+import re
 from urllib.parse import urlparse
 
 from people.schemas import (
@@ -14,6 +15,28 @@ logger = logging.getLogger(__name__)
 
 
 class PeopleDiscoveryAgent:
+
+    COUNTRY_MARKERS = {
+        "India": (
+            "india", "bengaluru", "bangalore", "mumbai", "hyderabad", "chennai",
+            "pune", "gurugram", "gurgaon", "noida", "new delhi", "kolkata",
+            "ahmedabad", "kochi", "coimbatore",
+        ),
+        "United States": (
+            "united states", "u.s.a.", "usa", "u.s.", "us-based", "united states of america",
+        ),
+        "Canada": ("canada",),
+        "United Kingdom": ("united kingdom", "u.k.", "uk-based", "england", "scotland", "wales"),
+        "Germany": ("germany",),
+        "France": ("france",),
+        "Australia": ("australia",),
+        "Singapore": ("singapore",),
+        "Ireland": ("ireland",),
+        "Netherlands": ("netherlands",),
+        "Spain": ("spain",),
+        "Brazil": ("brazil",),
+        "Japan": ("japan",),
+    }
 
     def __init__(self):
         self.search_engine = SearchEngine()
@@ -262,10 +285,27 @@ class PeopleDiscoveryAgent:
         else:
             aliases = {target_city} if target_city else set()
         evidence_lower = evidence.casefold()
+        target_country = cls._country_in(target_location)
+        observed_country = cls._country_in(profile_location or "") or cls._country_in(evidence)
+        broad_target = bool(
+            target_country
+            and (target_city == target_country.casefold() or target_city.startswith("remote"))
+        )
+
+        if broad_target:
+            # For country-scoped remote roles, require evidence for that
+            # country; an unknown or foreign location is not a local match.
+            return observed_country == target_country
+
+        if target_city in {"remote", "worldwide", "global", "anywhere"}:
+            return None
+
         if any(alias and alias in evidence_lower for alias in aliases):
             return True
         if not profile_location:
-            return None
+            # A city-specific role needs a city signal in the profile/search
+            # evidence. Don't silently treat an unknown location as a match.
+            return False
         place = profile_location.casefold()
         if any(alias and alias in place for alias in aliases):
             return True
@@ -286,8 +326,21 @@ class PeopleDiscoveryAgent:
             "uk", "canada", "germany", "france", "australia",
         }
         if place.strip(" .,") in coarse:
-            return None
+            return False
         return False
+
+    @classmethod
+    def _country_in(cls, value: str) -> str | None:
+        normalized = " ".join(value.casefold().replace(".", " ").split())
+        for country, markers in cls.COUNTRY_MARKERS.items():
+            for marker in markers:
+                marker_normalized = " ".join(marker.casefold().replace(".", " ").split())
+                if marker_normalized and re.search(
+                    rf"(?<![a-z]){re.escape(marker_normalized)}(?![a-z])",
+                    normalized,
+                ):
+                    return country
+        return None
 
     @staticmethod
     def _extract_name(

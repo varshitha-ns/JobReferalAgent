@@ -91,3 +91,37 @@ button:disabled {
   margin-top: 8px;
   font-size: 11px;
 }
+
+.prepare-draft {
+  margin-top: 10px;
+  padding: 9px 11px;
+  width: auto;
+  font-size: 12px;
+}
+
+.referral-draft {
+  margin-top: 12px;
+}
+
+.referral-draft label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.referral-draft textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 9px;
+  resize: vertical;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.referral-draft .contact-links button {
+  width: auto;
+  padding: 8px 10px;
+  font-size: 11px;
+}

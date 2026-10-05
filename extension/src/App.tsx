@@ -44,6 +44,14 @@ interface ReferralContact {
   relevance_reasons: string[];
 }
 
+interface ReferralDraft {
+  message: string;
+  subject: string;
+  candidate_name: string;
+  candidate_email: string;
+  candidate_linkedin: string;
+}
+
 function App() {
   const [job, setJob] = useState<JobData | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -52,6 +60,51 @@ function App() {
   const [error, setError] = useState<boolean>(false);
   const [contacts, setContacts] = useState<ReferralContact[]>([]);
   const [analysis, setAnalysis] = useState<Record<string, unknown> | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, ReferralDraft>>({});
+  const [draftLoading, setDraftLoading] = useState<Record<string, boolean>>({});
+  const [copiedDraft, setCopiedDraft] = useState<string | null>(null);
+
+  const contactKey = (contact: ReferralContact): string =>
+    `${contact.name}-${contact.public_email ?? contact.linkedin_url ?? contact.current_role ?? "contact"}`;
+
+  const prepareDraft = async (contact: ReferralContact): Promise<void> => {
+    if (!job) return;
+    const key = contactKey(contact);
+    setDraftLoading((current) => ({ ...current, [key]: true }));
+    try {
+      const response = await fetch("http://127.0.0.1:8000/referrals/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company: analysis?.company ?? job.company,
+          job_title: analysis?.title ?? job.title,
+          job_description: job.description,
+          job_url: job.url,
+          contact_name: contact.name,
+          contact_role: contact.current_role,
+        }),
+      });
+      if (!response.ok) throw new Error(`Draft request failed: ${response.status}`);
+      const draft = await response.json() as ReferralDraft;
+      setDrafts((current) => ({ ...current, [key]: draft }));
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not prepare referral draft.");
+      setError(true);
+    } finally {
+      setDraftLoading((current) => ({ ...current, [key]: false }));
+    }
+  };
+
+  const copyDraft = async (key: string, messageText: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(messageText);
+      setCopiedDraft(key);
+      window.setTimeout(() => setCopiedDraft(null), 2000);
+    } catch {
+      setMessage("Clipboard access failed. Select and copy the draft text instead.");
+      setError(true);
+    }
+  };
 
   // Analyze the currently opened job page
   const analyzeJob = async (): Promise<void> => {
@@ -283,6 +336,36 @@ function App() {
                   </a>
                 ))}
               </div>
+              {drafts[contactKey(contact)] ? (
+                <div className="referral-draft">
+                  <label htmlFor={`draft-${contactKey(contact)}`}>Personalized referral message</label>
+                  <textarea
+                    id={`draft-${contactKey(contact)}`}
+                    rows={8}
+                    value={drafts[contactKey(contact)].message}
+                    onChange={(event) => setDrafts((current) => ({
+                      ...current,
+                      [contactKey(contact)]: { ...current[contactKey(contact)], message: event.target.value },
+                    }))}
+                  />
+                  <div className="contact-links">
+                    <button type="button" onClick={() => void copyDraft(contactKey(contact), drafts[contactKey(contact)].message)}>
+                      {copiedDraft === contactKey(contact) ? "Copied" : "Copy LinkedIn message"}
+                    </button>
+                    {contact.public_email && (
+                      <a href={`mailto:${encodeURIComponent(contact.public_email)}?subject=${encodeURIComponent(drafts[contactKey(contact)].subject)}&body=${encodeURIComponent(drafts[contactKey(contact)].message)}`}>
+                        Open email draft
+                      </a>
+                    )}
+                    {contact.linkedin_url && <a href={contact.linkedin_url} target="_blank" rel="noopener noreferrer">Open LinkedIn to message</a>}
+                  </div>
+                  {contact.public_email && <p className="email-note">This opens a draft in your configured email app; review it before sending.</p>}
+                </div>
+              ) : (
+                <button type="button" className="prepare-draft" disabled={draftLoading[contactKey(contact)]} onClick={() => void prepareDraft(contact)}>
+                  {draftLoading[contactKey(contact)] ? "Preparing message..." : "Prepare referral message"}
+                </button>
+              )}
             </article>
           ))}
         </section>
